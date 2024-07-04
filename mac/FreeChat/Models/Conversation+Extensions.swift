@@ -8,14 +8,16 @@
 import Foundation
 import CoreData
 
-extension Conversation {
-  static func create(ctx: NSManagedObjectContext) throws -> Self {
-    let record = self.init(context: ctx)
-    record.createdAt = Date()
-    record.lastMessageAt = record.createdAt
 
-    try ctx.save()
-    return record
+extension Conversation {
+  static func create(ctx: NSManagedObjectContext, folder: Folder? = nil) throws -> Self {
+      let record = self.init(context: ctx)
+      record.createdAt = Date()
+      record.lastMessageAt = record.createdAt
+      record.folder = folder
+
+      try ctx.save()
+      return record
   }
 
   var orderedMessages: [Message] {
@@ -59,5 +61,9 @@ extension Conversation {
     if !isDeleted, changedValues()["updatedAt"] == nil {
       self.setValue(Date(), forKey: "updatedAt")
     }
+  }
+  func setFolder(_ folder: Folder?) {
+      self.folder = folder
+      self.updatedAt = Date()
   }
 }
