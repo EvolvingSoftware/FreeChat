@@ -23,11 +23,10 @@ extension Folder {
         return folder
     }
     
-    var subfolders: [Folder] {
-          let set = child as? Set<Folder> ?? []
-          return set.sorted {
-              ($0.name ?? "") < ($1.name ?? "")
-          }
+  
+      var subfolders: [Folder] {
+          let subfolderArray = (child != nil ? [child!] : []).sorted { ($0.name ?? "") < ($1.name ?? "") }
+          return subfolderArray
       }
       
       func addSubfolder(_ subfolder: Folder) {
@@ -74,7 +73,7 @@ extension Folder {
 
 
 
-// MARK: - CoreData generated accessors
+// CoreData generated accessors
 extension Folder {
     @objc(addChildObject:)
     @NSManaged public func addToChild(_ value: Folder)

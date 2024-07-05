@@ -31,6 +31,10 @@ struct FreeChatApp: App {
         Button("New Chat") {
           conversationManager.newConversation(viewContext: persistenceController.container.viewContext, openWindow: openWindow)
         }.keyboardShortcut(KeyboardShortcut("N"))
+        Button("New Folder"){
+          conversationManager.newFolder(viewContext: persistenceController.container.viewContext, openWindow: openWindow)
+        }.keyboardShortcut(KeyboardShortcut("G"))
+        
       }
       SidebarCommands()
       CommandGroup(after: .windowList, addition: {

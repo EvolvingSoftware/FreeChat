@@ -129,6 +129,10 @@ struct NavList: View {
   private func newConversation() {
     conversationManager.newConversation(viewContext: viewContext, openWindow: openWindow)
   }
+  
+  private func newFolder(){
+    conversationManager.newFolder(viewContext: viewContext, openWindow: openWindow)
+  }
 }
 
 #if DEBUG
