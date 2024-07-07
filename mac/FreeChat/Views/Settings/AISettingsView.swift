@@ -18,6 +18,8 @@ struct AISettingsView: View {
   @Environment(\.managedObjectContext) private var viewContext
   @EnvironmentObject var conversationManager: ConversationManager
 
+  
+  
   @FetchRequest(
     sortDescriptors: [NSSortDescriptor(keyPath: \Model.size, ascending: true)],
     animation: .default)
@@ -44,6 +46,8 @@ struct AISettingsView: View {
   @State var serverHealthScore: Double = -1
 
   @StateObject var gpu = GPU.shared
+  
+  
 
   let contextLengthFormatter: NumberFormatter = {
     let formatter = NumberFormatter()
@@ -236,133 +240,176 @@ struct AISettingsView: View {
     }
   }
 
-  var body: some View {
-    Form {
-      Section {
-        systemPromptEditor
-        modelPicker
-        if editRemoteModel {
-          sectionRemoteModel
-        }
+  
+ 
+
+      var body: some View {
+        
+        
+        
+        Form {
+              mainSection
+              advancedSection
+          }
+          .formStyle(.grouped)
+          .sheet(isPresented: $customizeModels, onDismiss: { pickedModel = selectedModelId }) {
+              EditModels(selectedModelId: $selectedModelId)
+          }
+          .sheet(isPresented: $editSystemPrompt) {
+              EditSystemPrompt()
+          }
+          .onSubmit(saveFormRemoteServer)
+          .navigationTitle(AISettingsView.title)
+          .onAppear(perform: setupInitialState)
+          .onChange(of: selectedModelId, perform: handleModelChange)
+          .onChange(of: systemPrompt, perform: handleSystemPromptChange)
+          .onChange(of: useGPU, perform: handleUseGPUChange)
+          .onReceive(
+              NotificationCenter.default.publisher(for: NSNotification.Name("selectedModelDidChange")),
+              perform: handleNotification
+          )
+          .frame(
+              minWidth: 300, maxWidth: 600, minHeight: 184, idealHeight: 195, maxHeight: 400,
+              alignment: .center
+          )
       }
-      Section {
-        DisclosureGroup(
-          isExpanded: $revealAdvanced,
-          content: {
-            VStack(alignment: .leading) {
-              HStack {
-                Text("Configure llama.cpp based on the model you're using.")
+
+      var mainSection: some View {
+          Section {
+              systemPromptEditor
+              modelPicker
+              if editRemoteModel {
+                  sectionRemoteModel
+              }
+          }
+      }
+
+      var advancedSection: some View {
+          Section {
+              DisclosureGroup(
+                  isExpanded: $revealAdvanced,
+                  content: { advancedOptions },
+                  label: { advancedOptionsLabel }
+              )
+          }
+      }
+
+      var advancedOptions: some View {
+          VStack(alignment: .leading) {
+              advancedOptionsHeader
+              if !editRemoteModel {
+                  Divider()
+                  contextLengthView
+              }
+              Divider()
+              temperatureView
+              if gpu.available && !editRemoteModel {
+                  Divider()
+                  gpuToggle
+              }
+          }
+      }
+
+      var advancedOptionsLabel: some View {
+          Button {
+              withAnimation {
+                  revealAdvanced.toggle()
+              }
+          } label: {
+              Text("Advanced Options")
+                  .frame(maxWidth: .infinity, alignment: .leading)
+                  .background(.white.opacity(0.0001))
+          }
+          .buttonStyle(.plain)
+      }
+
+      var advancedOptionsHeader: some View {
+          HStack {
+              Text("Configure llama.cpp based on the model you're using.")
                   .foregroundColor(Color(NSColor.secondaryLabelColor))
-                Button("Restore defaults") {
+              Button("Restore defaults") {
                   contextLength = DEFAULT_CONTEXT_LENGTH
                   temperature = DEFAULT_TEMP
-                }.buttonStyle(.link)
+              }.buttonStyle(.link)
                   .offset(x: -5.5)
-              }.font(.callout)
-                .padding(.top, 2.5)
-                .padding(.bottom, 4)
+          }.font(.callout)
+              .padding(.top, 2.5)
+              .padding(.bottom, 4)
+      }
 
-              if !editRemoteModel {
-                Divider()
+      var contextLengthView: some View {
+          HStack {
+              Text("Context Length")
+              TextField("", value: $contextLength, formatter: contextLengthFormatter)
+                  .padding(.vertical, -8)
+                  .padding(.trailing, -10)
+          }
+          .padding(.top, 0.5)
+      }
 
-                HStack {
-                  Text("Context Length")
-                  TextField("", value: $contextLength, formatter: contextLengthFormatter)
-                    .padding(.vertical, -8)
-                    .padding(.trailing, -10)
-                }
-                .padding(.top, 0.5)
-              }
-
-              Divider()
-
-              HStack {
-                Text("Temperature")
-                Slider(value: $temperature, in: 0...2, step: 0.1).offset(y: 1)
-                Text("\(temperatureFormatter.string(from: temperature as NSNumber) ?? "")")
+      var temperatureView: some View {
+          HStack {
+              Text("Temperature")
+              Slider(value: $temperature, in: 0...2, step: 0.1).offset(y: 1)
+              Text("\(temperatureFormatter.string(from: temperature as NSNumber) ?? "")")
                   .foregroundStyle(.secondary)
                   .padding(.leading, 4)
                   .frame(width: 24, alignment: .trailing)
-              }.padding(.top, 1)
-
-              if gpu.available && !editRemoteModel {
-                Divider()
-
-                Toggle("Use GPU Acceleration", isOn: $useGPU).padding(.top, 1)
-              }
-            }
-          },
-          label: {
-            Button {
-              withAnimation {
-                revealAdvanced.toggle()
-              }
-            } label: {
-              Text("Advanced Options")
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .background(.white.opacity(0.0001))
-            }
-            .buttonStyle(.plain)
-          })
+          }.padding(.top, 1)
       }
-    }
-    .formStyle(.grouped)
-    .sheet(isPresented: $customizeModels, onDismiss: { pickedModel = selectedModelId }) {
-      EditModels(selectedModelId: $selectedModelId)
-    }
-    .sheet(isPresented: $editSystemPrompt) {
-      EditSystemPrompt()
-    }
-    .onSubmit(saveFormRemoteServer)
-    .navigationTitle(AISettingsView.title)
-    .onAppear {
-      if selectedModelId != AISettingsView.remoteModelOption {
-        let selectedModelExists =
-          models
-          .compactMap({ $0.id?.uuidString })
-          .contains(selectedModelId)
-        if !selectedModelExists {
-          selectedModelId = models.first?.id?.uuidString
-        }
-      }
-      pickedModel = selectedModelId
 
-      inputServerTLS = serverTLS
-      inputServerHost = serverHost ?? ""
-      inputServerPort = serverPort ?? ""
-      updateRemoteServerURL()
-    }
-    .onChange(of: selectedModelId) { newModelId in
+      var gpuToggle: some View {
+          Toggle("Use GPU Acceleration", isOn: $useGPU).padding(.top, 1)
+      }
+
+      func setupInitialState() {
+          if selectedModelId != AISettingsView.remoteModelOption {
+              let selectedModelExists = models
+                  .compactMap({ $0.id?.uuidString })
+                  .contains(selectedModelId)
+              if !selectedModelExists {
+                  selectedModelId = models.first?.id?.uuidString
+              }
+          }
+          pickedModel = selectedModelId
+
+          inputServerTLS = serverTLS
+          inputServerHost = serverHost ?? ""
+          inputServerPort = serverPort ?? ""
+          updateRemoteServerURL()
+      }
+
+  
+  
+  func handleModelChange(_ newModelId: String?) {
       pickedModel = newModelId
-      guard
-        let model = models.first(where: { $0.id?.uuidString == newModelId }) ?? models.first
+      guard let model = models.first(where: { $0.id?.uuidString == newModelId }) ?? models.first
       else { return }
 
       conversationManager.rebootAgent(
-        systemPrompt: self.systemPrompt, model: model, viewContext: viewContext)
-    }
-    .onChange(of: systemPrompt) { nextPrompt in
-      guard let model: Model = selectedModel else { return }
-      conversationManager.rebootAgent(
-        systemPrompt: nextPrompt, model: model, viewContext: viewContext)
-    }
-    .onChange(of: useGPU) { nextUseGPU in
-      guard let model: Model = selectedModel else { return }
-      conversationManager.rebootAgent(
-        systemPrompt: self.systemPrompt, model: model, viewContext: viewContext)
-    }
-    .onReceive(
-      NotificationCenter.default.publisher(for: NSNotification.Name("selectedModelDidChange"))
-    ) { output in
-      if let updatedId: String = output.object as? String {
-        selectedModelId = updatedId
-      }
-    }
-    .frame(
-      minWidth: 300, maxWidth: 600, minHeight: 184, idealHeight: 195, maxHeight: 400,
-      alignment: .center)
+          systemPrompt: self.systemPrompt, model: model, viewContext: viewContext)
   }
 
+  func handleSystemPromptChange(_ nextPrompt: String) {
+      guard let model: Model = selectedModel else { return }
+      conversationManager.rebootAgent(
+          systemPrompt: nextPrompt, model: model, viewContext: viewContext)
+  }
+
+  func handleUseGPUChange(_ nextUseGPU: Bool) {
+      guard let model: Model = selectedModel else { return }
+      conversationManager.rebootAgent(
+          systemPrompt: self.systemPrompt, model: model, viewContext: viewContext)
+  }
+
+      func handleNotification(_ output: NotificationCenter.Publisher.Output) {
+          if let updatedId: String = output.object as? String {
+              selectedModelId = updatedId
+          }
+      }
+
+   
+  
   private func saveFormRemoteServer() {
     serverTLS = inputServerTLS
     serverHost = inputServerHost

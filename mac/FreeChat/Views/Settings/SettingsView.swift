@@ -10,11 +10,14 @@ import SwiftUI
 struct SettingsView: View {
   static let title = "Settings"
 
+  
+  
   private enum Tabs: Hashable {
     case ai, ui
   }
 
   var body: some View {
+    
     TabView {
       UISettingsView()
         .tabItem {

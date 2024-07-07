@@ -9,318 +9,96 @@ import SwiftUI
 import MarkdownUI
 import Foundation
 
-struct ConversationView: View, Sendable {
-  @Environment(\.managedObjectContext) private var viewContext
-  @EnvironmentObject private var conversationManager: ConversationManager
+struct SidebarView: View {
+    @FetchRequest(
+        sortDescriptors: [NSSortDescriptor(keyPath: \Folder.name, ascending: true)],
+        predicate: NSPredicate(format: "parent == nil"),
+        animation: .default)
+    private var rootFolders: FetchedResults<Folder>
 
-  @AppStorage("selectedModelId") private var selectedModelId: String?
-  @AppStorage("systemPrompt") private var systemPrompt: String = DEFAULT_SYSTEM_PROMPT
-  @AppStorage("contextLength") private var contextLength: Int = DEFAULT_CONTEXT_LENGTH
-  @AppStorage("playSoundEffects") private var playSoundEffects = true
-  @AppStorage("temperature") private var temperature: Double?
-  @AppStorage("useGPU") private var useGPU: Bool = DEFAULT_USE_GPU
-  @AppStorage("serverHost") private var serverHost: String?
-  @AppStorage("serverPort") private var serverPort: String?
-  @AppStorage("serverTLS") private var serverTLS: Bool?
-  @AppStorage("fontSizeOption") private var fontSizeOption: Int = 12
+    @FetchRequest(
+        sortDescriptors: [NSSortDescriptor(keyPath: \Conversation.lastMessageAt, ascending: false)],
+        predicate: NSPredicate(format: "folder == nil"),
+        animation: .default)
+    private var rootConversations: FetchedResults<Conversation>
 
-  @FetchRequest(
-    sortDescriptors: [NSSortDescriptor(keyPath: \Model.size, ascending: true)],
-    animation: .default)
-  private var models: FetchedResults<Model>
+    @Binding var selectedConversation: Conversation?
 
-  private static let SEND = NSDataAsset(name: "ESM_Perfect_App_Button_2_Organic_Simple_Classic_Game_Click")
-  private static let PING = NSDataAsset(name: "ESM_POWER_ON_SYNTH")
-  let sendSound = NSSound(data: SEND!.data)
-  let receiveSound = NSSound(data: PING!.data)
-
-  var conversation: Conversation {
-    conversationManager.currentConversation
-  }
-
-  var agent: Agent {
-    conversationManager.agent
-  }
-
-  var selectedModel: Model? {
-    if selectedModelId != AISettingsView.remoteModelOption,
-      let selectedModelId = self.selectedModelId {
-      models.first(where: { $0.id?.uuidString == selectedModelId })
-    } else {
-      models.first
-    }
-  }
-
-  @State var pendingMessage: Message?
-
-  @State var messages: [Message] = []
-
-  @State var showUserMessage = true
-  @State var showResponse = true
-  @State private var scrollPositions = [String: CGFloat]()
-  @State var pendingMessageText = ""
-
-  @State var scrollOffset = CGFloat.zero
-  @State var scrollHeight = CGFloat.zero
-  @State var autoScrollOffset = CGFloat.zero
-  @State var autoScrollHeight = CGFloat.zero
-
-  @State var llamaError: LlamaServerError? = nil
-  @State var showErrorAlert = false
-
-  var body: some View {
-    ObservableScrollView(scrollOffset: $scrollOffset, scrollHeight: $scrollHeight) { proxy in
-      VStack(alignment: .leading) {
-        ForEach(messages) { m in
-          if m == messages.last! {
-            if m == pendingMessage {
-              MessageView(pendingMessage!, overrideText: pendingMessageText, agentStatus: agent.status)
-                .onAppear {
-                scrollToLastIfRecent(proxy)
-              }
-                .opacity(showResponse ? 1 : 0)
-                .animation(.interpolatingSpring(stiffness: 170, damping: 20), value: showResponse)
-                .id("\(m.id)\(m.updatedAt as Date?)")
-            } else {
-              MessageView(m, agentStatus: nil)
-                .id("\(m.id)\(m.updatedAt as Date?)")
-                .opacity(showUserMessage ? 1 : 0)
-                .animation(.interpolatingSpring(stiffness: 170, damping: 20), value: showUserMessage)
+    var body: some View {
+        List {
+            ForEach(rootFolders) { folder in
+                FolderView(folder: folder, selectedConversation: $selectedConversation)
             }
-          } else {
-            MessageView(m, agentStatus: nil).transition(.identity).id("\(m.id)\(m.updatedAt as Date?)")
-          }
+            ForEach(rootConversations) { conversation in
+                Button(action: {
+                    selectedConversation = conversation
+                }) {
+                    Text(conversation.titleWithDefault)
+                }
+            }
         }
-      }
-        .padding(.vertical, 12)
-        .onReceive(
-        agent.$pendingMessage.throttle(for: .seconds(0.1), scheduler: RunLoop.main, latest: true)
-      ) { text in
-        pendingMessageText = text
-      }
-        .onReceive(
-        agent.$pendingMessage.throttle(for: .seconds(0.2), scheduler: RunLoop.main, latest: true)
-      ) { _ in
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-          autoScroll(proxy)
+    }
+}
+
+struct FolderView: View {
+    let folder: Folder
+    @State private var isExpanded = false
+    @Binding var selectedConversation: Conversation?
+
+    var body: some View {
+        DisclosureGroup(isExpanded: $isExpanded) {
+            ForEach(folder.child?.allObjects as? [Folder] ?? [], id: \.self) { subfolder in
+                FolderView(folder: subfolder, selectedConversation: $selectedConversation)
+            }
+            if let conversations = folder.conversation?.allObjects as? [Conversation] {
+                ForEach(conversations, id: \.self) { conversation in
+                    Button(action: {
+                        selectedConversation = conversation
+                    }) {
+                        Text(conversation.titleWithDefault)
+                    }
+                }
+            }
+        } label: {
+            Label(folder.name ?? "Untitled Folder", systemImage: "folder")
         }
-      }
     }
-      .textSelection(.enabled)
-      .font(.system(size:CGFloat( fontSizeOption)))
-      .safeAreaInset(edge: .bottom, spacing: 0) {
-      MessageTextField { s in
-        submit(s)
-      }
-    }
-      .frame(maxWidth: .infinity)
-      .onAppear { showConversation(conversation) }
-      .onChange(of: conversation) { nextConvo in showConversation(nextConvo) }
-      .onChange(of: selectedModelId) { showConversation(conversation, modelId: $0) }
-      .navigationTitle(conversation.titleWithDefault)
-      .alert(isPresented: $showErrorAlert, error: llamaError) { _ in
-      Button("OK") {
-        llamaError = nil
-      }
-    } message: { error in
-      Text(error.recoverySuggestion ?? "")
-    }
-      .background(Color.textBackground)
-  }
+}
 
-  private func playSendSound() {
-    guard let sendSound, playSoundEffects else { return }
-    sendSound.volume = 0.3
-    sendSound.play()
-  }
 
-  private func playReceiveSound() {
-    guard let receiveSound, playSoundEffects else { return }
-    receiveSound.volume = 0.5
-    receiveSound.play()
-  }
+struct ConversationLink: View {
+    let conversation: Conversation
+    @EnvironmentObject private var conversationManager: ConversationManager
 
-  private func showConversation(_ c: Conversation, modelId: String? = nil) {
-    guard
-      let selectedModelId = modelId ?? self.selectedModelId,
-      !selectedModelId.isEmpty
-    else { return }
-
-    messages = c.orderedMessages
-        
-
-    // warmup the agent if it's cold or model has changed
-    Task {
-      if selectedModelId == AISettingsView.remoteModelOption {
-        await initializeServerRemote()
-      } else {
-        await initializeServerLocal(modelId: selectedModelId)
-      }
-    }
-  }
-
-  private func initializeServerLocal(modelId: String) async {
-    guard let id = UUID(uuidString: modelId)
-    else { return }
-    
-    let llamaPath = await agent.llama.modelPath
-    let req = Model.fetchRequest()
-    req.predicate = NSPredicate(format: "id == %@", id as CVarArg)
-    if let model = try? viewContext.fetch(req).first,
-       let modelPath = model.url?.path(percentEncoded: false),
-       modelPath != llamaPath {
-      await agent.llama.stopServer()
-      agent.llama = LlamaServer(modelPath: modelPath, contextLength: contextLength)
-    }
-  }
-
-  private func initializeServerRemote() async {
-    guard let tls = serverTLS,
-          let host = serverHost,
-          let port = serverPort
-    else { return }
-    await agent.llama.stopServer()
-    agent.llama = LlamaServer(contextLength: contextLength, tls: tls, host: host, port: port)
-  }
-
-  private func scrollToLastIfRecent(_ proxy: ScrollViewProxy) {
-    let fiveSecondsAgo = Date() - TimeInterval(5) // 5 seconds ago
-    let last = messages.last
-    if last?.updatedAt != nil, last!.updatedAt! >= fiveSecondsAgo {
-      proxy.scrollTo(last!.id, anchor: .bottom)
-    }
-  }
-
-  // autoscroll to the bottom if the user is near the bottom
-  private func autoScroll(_ proxy: ScrollViewProxy) {
-    let last = messages.last
-    if last != nil, shouldAutoScroll() {
-      proxy.scrollTo(last!.id, anchor: .bottom)
-      engageAutoScroll()
-    }
-  }
-
-  private func shouldAutoScroll() -> Bool {
-    scrollOffset >= autoScrollOffset - 40 && scrollHeight > autoScrollHeight
-  }
-
-  private func engageAutoScroll() {
-    autoScrollOffset = scrollOffset
-    autoScrollHeight = scrollHeight
-  }
-
-  @MainActor
-  func handleResponseError(_ e: LlamaServerError) {
-    print("handle response error", e.localizedDescription)
-    if let m = pendingMessage {
-      viewContext.delete(m)
-    }
-    llamaError = e
-    showResponse = false
-    showErrorAlert = true
-  }
-
-  func submit(_ input: String) {
-    if (agent.status == .processing || agent.status == .coldProcessing) {
-      Task {
-        await agent.interrupt()
-
-        Task.detached(priority: .userInitiated) {
-          try? await Task.sleep(for: .seconds(1))
-          await submit(input)
+    var body: some View {
+        Button(action: {
+            conversationManager.currentConversation = conversation
+        }) {
+            Text(conversation.titleWithDefault)
+                .foregroundColor(conversation == conversationManager.currentConversation ? .accentColor : .primary)
         }
-      }
-      return
     }
+}
+struct ConversationView: View {
+    @EnvironmentObject private var conversationManager: ConversationManager
+    @State private var selectedConversation: Conversation?
 
-    playSendSound()
-
-    showUserMessage = false
-    engageAutoScroll()
-
-    // Create user's message
-    do {
-      _ = try Message.create(text: input, fromId: Message.USER_SPEAKER_ID, conversation: conversation, systemPrompt: systemPrompt, inContext: viewContext)
-    } catch (let error) {
-      print("Error creating message", error.localizedDescription)
-    }
-    showResponse = false
-
-    let agentConversation = conversation
-    messages = agentConversation.orderedMessages
-    withAnimation {
-      showUserMessage = true
-    }
-
-    // Pending message for bot's reply
-    let m = Message(context: viewContext)
-    m.fromId = agent.id
-    m.createdAt = Date()
-    m.updatedAt = m.createdAt
-    m.systemPrompt = systemPrompt
-    m.text = ""
-    pendingMessage = m
-
-    agent.systemPrompt = systemPrompt
-
-    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-      guard agentConversation == conversation,
-        !m.isDeleted,
-        m.managedObjectContext == agentConversation.managedObjectContext else {
-        return
-      }
-
-      m.conversation = agentConversation
-      messages = agentConversation.orderedMessages
-
-      withAnimation {
-        showResponse = true
-      }
-    }
-
-    Task {
-      var response: LlamaServer.CompleteResponse
-      do {
-        response = try await agent.listenThinkRespond(speakerId: Message.USER_SPEAKER_ID, messages: messages, temperature: temperature)
-      } catch let error as LlamaServerError {
-        handleResponseError(error)
-        return
-      } catch {
-        print("agent listen threw unexpected error", error as Any)
-        return
-      }
-
-      await MainActor.run {
-        m.text = response.text
-        m.predictedPerSecond = response.predictedPerSecond ?? -1
-        m.responseStartSeconds = response.responseStartSeconds
-        m.nPredicted = Int64(response.nPredicted ?? -1)
-        m.modelName = response.modelName
-        m.updatedAt = Date()
-
-        playReceiveSound()
-        do {
-          try viewContext.save()
-        } catch {
-          print("error creating message", error.localizedDescription)
+    var body: some View {
+        NavigationSplitView {
+            SidebarView(selectedConversation: $selectedConversation)
+        } detail: {
+            if let conversation = selectedConversation {
+                ConversationDetailView(conversation: conversation)
+            } else {
+                Text("Select a conversation")
+            }
         }
-
-        if pendingMessage?.text != nil,
-          !pendingMessage!.text!.isEmpty,
-          response.text.hasPrefix(agent.pendingMessage),
-          m == pendingMessage {
-          pendingMessage = nil
-          agent.pendingMessage = ""
+        .onChange(of: selectedConversation) { newConversation in
+            if let newConversation = newConversation {
+                conversationManager.currentConversation = newConversation
+            }
         }
-
-        if conversation != agentConversation {
-          return
-        }
-
-        messages = agentConversation.orderedMessages
-      }
     }
-  }
 }
 
 #Preview {
@@ -358,6 +136,7 @@ struct ConversationView: View, Sendable {
     .environmentObject(cm)
 }
 
+
 #Preview("null state") {
   let ctx = PersistenceController.preview.container.viewContext
   let c = try! Conversation.create(ctx: ctx)
@@ -369,4 +148,22 @@ struct ConversationView: View, Sendable {
     .environment(\.managedObjectContext, ctx)
     .environmentObject(cm)
 }
-
+/*
+ #Preview {
+ let previewContext = PersistenceController.preview.container.viewContext
+ let mockConversation = Conversation(context: previewContext)
+ mockConversation.title = "Mock Conversation"
+ 
+ let mockMessage = Message(context: previewContext)
+ mockMessage.text = "Hello, this is a mock message"
+ mockMessage.fromId = Message.USER_SPEAKER_ID
+ mockMessage.conversation = mockConversation
+ 
+ let mockConversationManager = ConversationManager()
+ mockConversationManager.currentConversation = mockConversation
+ 
+ return ConversationView()
+ .environment(\.managedObjectContext, previewContext)
+ .environmentObject(mockConversationManager)
+ }
+ */

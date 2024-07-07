@@ -21,6 +21,9 @@ class ConversationManager: ObservableObject {
   @Published var agent: Agent = Agent(id: "Llama", systemPrompt: "", modelPath: "", contextLength: DEFAULT_CONTEXT_LENGTH)
   @Published var loadingModelId: String?
   
+  @Published var rootFolders: [Folder] = []
+  @Published var rootConversations: [Conversation] = []
+  
   private static var dummyConversation: Conversation = {
     let tempMoc = NSManagedObjectContext(concurrencyType: .mainQueueConcurrencyType)
     return Conversation(context: tempMoc)
@@ -83,25 +86,58 @@ class ConversationManager: ObservableObject {
     catch (let error){
       print("no folder created",error.localizedDescription)
     }
-    
-    @MainActor
-    func rebootAgent(systemPrompt: String? = nil, model: Model, viewContext: NSManagedObjectContext) {
-      let systemPrompt = systemPrompt ?? self.systemPrompt
-      guard let url = model.url else {
-        return
-      }
+  }
+  
+  func fetchRootItems(viewContext: NSManagedObjectContext) {
+      let folderFetch: NSFetchRequest<Folder> = Folder.fetchRequest()
+      folderFetch.predicate = NSPredicate(format: "parent == nil")
+      rootFolders = (try? viewContext.fetch(folderFetch)) ?? []
       
-      Task {
-        await agent.llama.stopServer()
-        
-        agent = Agent(id: "Llama", systemPrompt: systemPrompt, modelPath: url.path, contextLength: contextLength)
-        loadingModelId = model.id?.uuidString
-        
-        model.error = nil
-        
-        loadingModelId = nil
-        try? viewContext.save()
+      let conversationFetch: NSFetchRequest<Conversation> = Conversation.fetchRequest()
+      conversationFetch.predicate = NSPredicate(format: "folder == nil")
+      rootConversations = (try? viewContext.fetch(conversationFetch)) ?? []
+  }
+  
+      
+  func createFolder(name: String, parent: Folder?, viewContext: NSManagedObjectContext) {
+    do {
+      let newFolder = try Folder.create(ctx: viewContext, name: name, parent: parent)
+      if parent == nil {
+          rootFolders.append(newFolder)
       }
+    } catch {
+      print("Error creating folder:", error)
+    }
+  }
+      
+  func moveConversation(_ conversation: Conversation, to folder: Folder?, viewContext: NSManagedObjectContext) {
+    conversation.folder = folder
+    if folder == nil {
+      rootConversations.append(conversation)
+    } else {
+      rootConversations.removeAll { $0 == conversation }
+    }
+    try? viewContext.save()
+  }
+  
+  @MainActor
+  func rebootAgent(systemPrompt: String? = nil, model: Model, viewContext: NSManagedObjectContext) {
+    let systemPrompt = systemPrompt ?? self.systemPrompt
+    guard let url = model.url else {
+      return
+    }
+    
+    Task {
+      await agent.llama.stopServer()
+      
+      agent = Agent(id: "Llama", systemPrompt: systemPrompt, modelPath: url.path, contextLength: contextLength)
+      loadingModelId = model.id?.uuidString
+      
+      model.error = nil
+      
+      loadingModelId = nil
+      try? viewContext.save()
     }
   }
 }
+
